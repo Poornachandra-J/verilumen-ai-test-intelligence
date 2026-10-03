@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.express as px
+import plotly.graph_objects as go
 
-from sklearn.model_selection import train_test_split
-from sklearn.pipeline import Pipeline
+from sklearn.ensemble import IsolationForest, RandomForestClassifier
 from sklearn.impute import SimpleImputer
-from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, IsolationForest
 from sklearn.metrics import (
     accuracy_score,
     precision_score,
@@ -16,8 +15,9 @@ from sklearn.metrics import (
     roc_auc_score,
     confusion_matrix
 )
-
-import plotly.express as px
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 # ============================================================
@@ -27,53 +27,116 @@ import plotly.express as px
 st.set_page_config(
     page_title="Verilumen AI Test Intelligence",
     page_icon="🔬",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 
 # ============================================================
-# TITLE
+# CUSTOM DASHBOARD DESIGN
 # ============================================================
 
-st.title("🔬 Verilumen AI Test Intelligence")
+st.markdown("""
+<style>
 
-st.markdown(
-    """
-### Semiconductor ATE Test Analysis, Yield Monitoring,
-Failure Prediction & Anomaly Detection
-"""
-)
+.stApp {
+    background-color: #f5f8fc;
+}
 
-st.divider()
+.block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 3rem;
+}
+
+.hero {
+    background: linear-gradient(
+        110deg,
+        #102a43,
+        #176b87,
+        #16a085
+    );
+    padding: 30px;
+    border-radius: 18px;
+    color: white;
+    margin-bottom: 25px;
+}
+
+.hero h1 {
+    color: white;
+    font-size: 35px;
+}
+
+.hero p {
+    color: #e2f3f5;
+    font-size: 16px;
+}
+
+div[data-testid="stMetric"] {
+    background: white;
+    padding: 18px;
+    border-radius: 13px;
+    border: 1px solid #e1e8f0;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.04);
+}
+
+section[data-testid="stSidebar"] {
+    background-color: #edf3f8;
+}
+
+</style>
+""", unsafe_allow_html=True)
 
 
 # ============================================================
-# SIDEBAR
+# COLOR SETTINGS
 # ============================================================
 
-st.sidebar.header("📁 Data")
+COLORS = {
+    "PASS": "#16a085",
+    "FAIL": "#e05d5d",
+    "Other": "#64748b"
+}
 
-uploaded_file = st.sidebar.file_uploader(
-    "Upload ATE CSV",
-    type=["csv"]
-)
+TEMPLATE = "plotly_white"
+
+
+def style_chart(fig, height=400):
+
+    fig.update_layout(
+        template=TEMPLATE,
+        height=height,
+        margin=dict(l=20, r=20, t=60, b=20),
+        title_font=dict(
+            size=18,
+            color="#18324b"
+        ),
+        legend_title_text="",
+        hovermode="closest"
+    )
+
+    return fig
 
 
 # ============================================================
 # HELPER FUNCTIONS
 # ============================================================
 
-def find_column(df, possible_names):
+def find_column(df, candidates):
 
-    for name in possible_names:
+    lookup = {
+        str(c).strip().lower(): c
+        for c in df.columns
+    }
 
-        if name in df.columns:
-            return name
+    for candidate in candidates:
+
+        if candidate.lower() in lookup:
+            return lookup[candidate.lower()]
 
     return None
 
 
-def clean_result_column(df):
+def clean_result(df):
 
     result_col = find_column(
         df,
@@ -83,62 +146,154 @@ def clean_result_column(df):
             "Pass_Fail",
             "PASS_FAIL",
             "Status",
-            "status"
+            "Test_Result"
         ]
     )
 
-    if result_col is None:
-        return df, None
+    if result_col:
 
-    df[result_col] = (
-        df[result_col]
-        .astype(str)
-        .str.upper()
-        .str.strip()
-    )
+        df[result_col] = (
+            df[result_col]
+            .astype("string")
+            .str.strip()
+            .str.upper()
+        )
+
+        df[result_col] = df[result_col].replace({
+            "1": "PASS",
+            "0": "FAIL",
+            "GOOD": "PASS",
+            "BAD": "FAIL",
+            "TRUE": "PASS",
+            "FALSE": "FAIL"
+        })
 
     return df, result_col
 
 
-def numeric_columns(df):
+def yield_summary(data, group_col, result_col):
 
-    return df.select_dtypes(
-        include=np.number
-    ).columns.tolist()
+    valid = data[
+        data[result_col].isin(["PASS", "FAIL"])
+    ]
+
+    summary = (
+        valid.groupby(group_col)[result_col]
+        .apply(
+            lambda x: (x == "PASS").mean() * 100
+        )
+        .reset_index(name="Yield")
+    )
+
+    return summary.sort_values("Yield")
+
+
+def download_csv(data, filename, label):
+
+    st.download_button(
+        label=label,
+        data=data.to_csv(index=False).encode("utf-8"),
+        file_name=filename,
+        mime="text/csv",
+        use_container_width=True
+    )
 
 
 # ============================================================
-# NO FILE YET
+# HEADER
+# ============================================================
+
+st.markdown("""
+<div class="hero">
+
+<h1>🔬 Verilumen AI Test Intelligence</h1>
+
+<p>
+Semiconductor ATE Analytics |
+Yield Monitoring |
+Failure Prediction |
+Anomaly Detection |
+Machine Learning
+</p>
+
+</div>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+st.sidebar.title("📁 Data Management")
+
+uploaded_file = st.sidebar.file_uploader(
+    "Upload Semiconductor ATE CSV",
+    type=["csv"]
+)
+
+st.sidebar.divider()
+
+st.sidebar.markdown("### 📊 Dashboard Modules")
+
+st.sidebar.markdown("""
+- Executive Overview
+- Yield Analysis
+- Failure Investigation
+- Lot Analysis
+- Wafer Analysis
+- Parameter Analysis
+- Correlation Analysis
+- Anomaly Detection
+- Machine Learning
+- Data Export
+""")
+
+st.sidebar.divider()
+
+st.sidebar.caption(
+    "Verilumen AI Test Intelligence"
+)
+
+
+# ============================================================
+# WAITING FOR CSV
 # ============================================================
 
 if uploaded_file is None:
 
     st.info(
-        "👈 Upload the assessment CSV from the sidebar to begin."
+        "👈 Upload your ATE CSV file using the sidebar."
     )
 
-    st.markdown(
-        """
-### What this application will do
+    st.markdown("## 🚀 Dashboard Features")
 
-1. Validate the CSV
-2. Analyze data quality
-3. Calculate test yield
-4. Investigate failures
-5. Analyze lots / wafers when available
-6. Detect anomalies
-7. Train ML models
-8. Compare model performance
-9. Predict PASS / FAIL
-10. Provide engineering observations
-"""
-    )
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.markdown("### 📊 Analytics")
+        st.write(
+            "Interactive bar charts, pie charts, "
+            "histograms and box plots."
+        )
+
+    with c2:
+        st.markdown("### 🤖 Machine Learning")
+        st.write(
+            "PASS/FAIL prediction and model comparison."
+        )
+
+    with c3:
+        st.markdown("### 🚨 Anomaly Detection")
+        st.write(
+            "Identify unusual test measurements "
+            "using Isolation Forest."
+        )
 
     st.stop()
 
 
 # ============================================================
-# LOAD CSV
+# LOAD DATA
 # ============================================================
 
 try:
@@ -147,16 +302,10 @@ try:
 
 except Exception as error:
 
-    st.error(
-        f"Could not read the CSV: {error}"
-    )
+    st.error(f"CSV loading error: {error}")
 
     st.stop()
 
-
-# ============================================================
-# BASIC CLEANING
-# ============================================================
 
 original_rows = len(df)
 
@@ -166,264 +315,251 @@ duplicate_count = int(
 
 df = df.drop_duplicates().copy()
 
-missing_values = int(
-    df.isna().sum().sum()
-)
+df, result_col = clean_result(df)
 
-df, result_col = clean_result_column(df)
-
-
-# ============================================================
-# HEADER INFORMATION
-# ============================================================
-
-st.success(
-    f"CSV loaded successfully: {len(df):,} records"
+numeric_columns = (
+    df.select_dtypes(include=np.number)
+    .columns.tolist()
 )
 
 
 # ============================================================
-# KPI SECTION
+# SIDEBAR FILTERS
 # ============================================================
 
-st.subheader("📊 Overview")
+st.sidebar.markdown("### 🔎 Data Filters")
 
-col1, col2, col3, col4 = st.columns(4)
+filtered = df.copy()
 
-with col1:
+lot_col = find_column(
+    df,
+    ["Lot", "Lot_ID", "lot_id"]
+)
 
-    st.metric(
-        "Records",
-        f"{len(df):,}"
+wafer_col = find_column(
+    df,
+    ["Wafer", "Wafer_ID", "WaferID"]
+)
+
+test_col = find_column(
+    df,
+    ["Test_Name", "TestName", "Test"]
+)
+
+failure_col = find_column(
+    df,
+    ["Failure_Mode", "FailureMode", "Failure"]
+)
+
+if lot_col:
+
+    lot_options = sorted(
+        df[lot_col].dropna().astype(str).unique()
     )
 
-with col2:
-
-    st.metric(
-        "Columns",
-        f"{len(df.columns):,}"
+    selected_lots = st.sidebar.multiselect(
+        "Select Lots",
+        lot_options,
+        default=lot_options
     )
 
-with col3:
-
-    st.metric(
-        "Duplicates Removed",
-        f"{duplicate_count:,}"
-    )
-
-with col4:
-
-    st.metric(
-        "Missing Values",
-        f"{missing_values:,}"
-    )
-
-
-# ============================================================
-# RESULT ANALYSIS
-# ============================================================
-
-if result_col is not None:
-
-    pass_count = int(
-        (df[result_col] == "PASS").sum()
-    )
-
-    fail_count = int(
-        (df[result_col] == "FAIL").sum()
-    )
-
-    total_results = pass_count + fail_count
-
-    if total_results > 0:
-
-        yield_rate = (
-            pass_count /
-            total_results *
-            100
-        )
-
-        fail_rate = (
-            fail_count /
-            total_results *
-            100
-        )
-
-    else:
-
-        yield_rate = 0
-        fail_rate = 0
-
-    st.divider()
-
-    st.subheader("🎯 Test Yield")
-
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-
-        st.metric(
-            "PASS",
-            f"{pass_count:,}"
-        )
-
-    with c2:
-
-        st.metric(
-            "FAIL",
-            f"{fail_count:,}"
-        )
-
-    with c3:
-
-        st.metric(
-            "Yield",
-            f"{yield_rate:.2f}%"
-        )
-
-    # --------------------------------------------------------
-    # PASS / FAIL CHART
-    # --------------------------------------------------------
-
-    result_counts = (
-        df[result_col]
-        .value_counts()
-        .reset_index()
-    )
-
-    result_counts.columns = [
-        "Result",
-        "Count"
+    filtered = filtered[
+        filtered[lot_col].astype(str).isin(selected_lots)
     ]
 
-    fig = px.bar(
-        result_counts,
-        x="Result",
-        y="Count",
-        title="PASS / FAIL Distribution",
-        text="Count"
+
+if wafer_col:
+
+    wafer_options = sorted(
+        df[wafer_col].dropna().astype(str).unique()
     )
 
-    st.plotly_chart(
-        fig,
-        use_container_width=True
+    selected_wafers = st.sidebar.multiselect(
+        "Select Wafers",
+        wafer_options,
+        default=wafer_options
     )
+
+    filtered = filtered[
+        filtered[wafer_col].astype(str).isin(selected_wafers)
+    ]
+
+
+if test_col:
+
+    test_options = sorted(
+        df[test_col].dropna().astype(str).unique()
+    )
+
+    selected_tests = st.sidebar.multiselect(
+        "Select Tests",
+        test_options,
+        default=test_options
+    )
+
+    filtered = filtered[
+        filtered[test_col].astype(str).isin(selected_tests)
+    ]
+
+
+if result_col:
+
+    result_options = [
+        x for x in ["PASS", "FAIL"]
+        if x in df[result_col].dropna().unique()
+    ]
+
+    selected_results = st.sidebar.multiselect(
+        "Select Result",
+        result_options,
+        default=result_options
+    )
+
+    filtered = filtered[
+        filtered[result_col].isin(selected_results)
+    ]
+
+
+if filtered.empty:
+
+    st.warning(
+        "No records match your filters. "
+        "Please change the sidebar selections."
+    )
+
+    st.stop()
 
 
 # ============================================================
-# DATA PREVIEW
-# ============================================================
-
-with st.expander("🔍 View Dataset"):
-
-    st.dataframe(
-        df.head(100),
-        use_container_width=True
-    )
-
-
-# ============================================================
-# FAILURE ANALYSIS
+# EXECUTIVE OVERVIEW
 # ============================================================
 
 st.divider()
 
-st.subheader("❌ Failure Analysis")
+st.subheader("📊 Executive Overview")
 
-if result_col is not None:
+pass_count = 0
+fail_count = 0
 
-    failures = df[
-        df[result_col] == "FAIL"
-    ].copy()
+if result_col:
 
-    if len(failures) == 0:
+    pass_count = int(
+        (filtered[result_col] == "PASS").sum()
+    )
 
-        st.success(
-            "No FAIL records were found."
+    fail_count = int(
+        (filtered[result_col] == "FAIL").sum()
+    )
+
+total_results = pass_count + fail_count
+
+yield_rate = (
+    pass_count / total_results * 100
+    if total_results > 0
+    else 0
+)
+
+missing_values = int(
+    filtered.isna().sum().sum()
+)
+
+c1, c2, c3, c4, c5 = st.columns(5)
+
+c1.metric(
+    "Total Records",
+    f"{len(filtered):,}"
+)
+
+c2.metric(
+    "PASS Records",
+    f"{pass_count:,}"
+)
+
+c3.metric(
+    "FAIL Records",
+    f"{fail_count:,}"
+)
+
+c4.metric(
+    "Test Yield",
+    f"{yield_rate:.2f}%"
+)
+
+c5.metric(
+    "Missing Values",
+    f"{missing_values:,}"
+)
+
+st.caption(
+    f"Original records: {original_rows:,} | "
+    f"Duplicates removed: {duplicate_count:,}"
+)
+
+
+# ============================================================
+# PASS FAIL ANALYSIS
+# ============================================================
+
+st.divider()
+
+st.subheader("🎯 PASS / FAIL Analysis")
+
+if result_col and total_results > 0:
+
+    result_counts = (
+        filtered[result_col]
+        .value_counts()
+        .rename_axis("Result")
+        .reset_index(name="Records")
+    )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        fig = px.bar(
+            result_counts,
+            x="Result",
+            y="Records",
+            color="Result",
+            color_discrete_map=COLORS,
+            text="Records",
+            title="PASS vs FAIL Distribution"
         )
 
-    else:
-
-        # ----------------------------------------------------
-        # TEST NAME
-        # ----------------------------------------------------
-
-        test_col = find_column(
-            df,
-            [
-                "Test_Name",
-                "TestName",
-                "Test",
-                "test_name"
-            ]
+        fig.update_traces(
+            textposition="outside"
         )
 
-        if test_col:
-
-            top_tests = (
-                failures[test_col]
-                .value_counts()
-                .head(10)
-                .reset_index()
-            )
-
-            top_tests.columns = [
-                test_col,
-                "Failures"
-            ]
-
-            fig = px.bar(
-                top_tests,
-                x="Failures",
-                y=test_col,
-                orientation="h",
-                title="Top Failing Tests"
-            )
-
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
-
-        # ----------------------------------------------------
-        # FAILURE MODE
-        # ----------------------------------------------------
-
-        failure_mode_col = find_column(
-            df,
-            [
-                "Failure_Mode",
-                "FailureMode",
-                "Failure",
-                "failure_mode"
-            ]
+        st.plotly_chart(
+            style_chart(fig),
+            use_container_width=True
         )
 
-        if failure_mode_col:
+    with col2:
 
-            modes = (
-                failures[failure_mode_col]
-                .value_counts()
-                .head(10)
-                .reset_index()
-            )
+        fig = px.pie(
+            result_counts,
+            names="Result",
+            values="Records",
+            hole=0.55,
+            color="Result",
+            color_discrete_map=COLORS,
+            title="PASS / FAIL Percentage"
+        )
 
-            modes.columns = [
-                failure_mode_col,
-                "Failures"
-            ]
+        fig.update_traces(
+            textinfo="percent+label"
+        )
 
-            fig = px.bar(
-                modes,
-                x=failure_mode_col,
-                y="Failures",
-                title="Common Failure Modes"
-            )
+        st.plotly_chart(
+            style_chart(fig),
+            use_container_width=True
+        )
 
-            st.plotly_chart(
-                fig,
-                use_container_width=True
-            )
+else:
+
+    st.info("PASS/FAIL data is not available.")
 
 
 # ============================================================
@@ -432,139 +568,499 @@ if result_col is not None:
 
 st.divider()
 
-st.subheader("🏭 Lot / Wafer Analysis")
+st.subheader("🏭 Lot Yield Analysis")
 
-lot_col = find_column(
-    df,
-    [
-        "Lot",
-        "Lot_ID",
-        "Lot_ID",
-        "lot",
-        "lot_id"
-    ]
-)
+if result_col and lot_col:
 
-wafer_col = find_column(
-    df,
-    [
-        "Wafer",
-        "Wafer_ID",
-        "WaferID",
-        "wafer",
-        "wafer_id"
-    ]
-)
-
-
-if result_col is not None and lot_col:
-
-    lot_summary = (
-        df.groupby(lot_col)[result_col]
-        .apply(
-            lambda x:
-            (x == "PASS").mean() * 100
-        )
-        .reset_index(
-            name="Yield"
-        )
-        .sort_values(
-            "Yield"
-        )
-    )
-
-    st.markdown(
-        "### Yield by Lot"
+    lot_data = yield_summary(
+        filtered,
+        lot_col,
+        result_col
     )
 
     fig = px.bar(
-        lot_summary.head(20),
-        x=lot_col,
-        y="Yield",
-        title="Lowest-Yield Lots"
+        lot_data,
+        x="Yield",
+        y=lot_col,
+        orientation="h",
+        color="Yield",
+        color_continuous_scale="Tealgrn",
+        title="Yield Percentage by Lot",
+        text=lot_data["Yield"].round(2)
     )
 
-    fig.update_yaxes(
-        title="Yield (%)"
-    )
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-if result_col is not None and wafer_col:
-
-    wafer_summary = (
-        df.groupby(wafer_col)[result_col]
-        .apply(
-            lambda x:
-            (x == "PASS").mean() * 100
-        )
-        .reset_index(
-            name="Yield"
-        )
-        .sort_values(
-            "Yield"
-        )
-    )
-
-    st.markdown(
-        "### Yield by Wafer"
-    )
-
-    fig = px.bar(
-        wafer_summary.head(20),
-        x=wafer_col,
-        y="Yield",
-        title="Lowest-Yield Wafers"
-    )
-
-    fig.update_yaxes(
-        title="Yield (%)"
+    fig.update_layout(
+        yaxis={"categoryorder": "total ascending"},
+        xaxis_title="Yield (%)"
     )
 
     st.plotly_chart(
-        fig,
+        style_chart(fig),
         use_container_width=True
     )
+
+    with st.expander("View Lot Yield Table"):
+
+        st.dataframe(
+            lot_data,
+            use_container_width=True,
+            hide_index=True
+        )
+
+else:
+
+    st.info("Lot ID or PASS/FAIL column not detected.")
 
 
 # ============================================================
-# NUMERIC DATA DISTRIBUTIONS
+# WAFER ANALYSIS
 # ============================================================
 
 st.divider()
 
-st.subheader("📈 Numeric Test Parameters")
+st.subheader("💿 Wafer Yield Analysis")
 
-numbers = numeric_columns(df)
+if result_col and wafer_col:
 
-if len(numbers) > 0:
-
-    selected_numeric = st.selectbox(
-        "Select a numeric parameter",
-        numbers
+    wafer_data = yield_summary(
+        filtered,
+        wafer_col,
+        result_col
     )
 
-    fig = px.histogram(
-        df,
-        x=selected_numeric,
-        nbins=40,
-        title=f"Distribution of {selected_numeric}"
+    fig = px.bar(
+        wafer_data,
+        x=wafer_col,
+        y="Yield",
+        color="Yield",
+        color_continuous_scale="Viridis",
+        title="Yield by Wafer"
+    )
+
+    fig.update_layout(
+        xaxis_title="Wafer ID",
+        yaxis_title="Yield (%)"
     )
 
     st.plotly_chart(
-        fig,
+        style_chart(fig),
         use_container_width=True
     )
 
+    with st.expander("View Wafer Yield Table"):
+
+        st.dataframe(
+            wafer_data,
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+# ============================================================
+# TEST ANALYSIS
+# ============================================================
+
+st.divider()
+
+st.subheader("🧪 Test Analysis")
+
+if test_col:
+
+    test_counts = (
+        filtered[test_col]
+        .value_counts()
+        .rename_axis("Test")
+        .reset_index(name="Count")
+    )
+
+    fig = px.bar(
+        test_counts,
+        x="Count",
+        y="Test",
+        orientation="h",
+        text="Count",
+        color="Count",
+        color_continuous_scale="Blues",
+        title="Test Execution Distribution"
+    )
+
+    fig.update_layout(
+        yaxis={"categoryorder": "total ascending"}
+    )
+
+    st.plotly_chart(
+        style_chart(fig),
+        use_container_width=True
+    )
+
+    if result_col:
+
+        test_failure = (
+            filtered.assign(
+                _fail=(filtered[result_col] == "FAIL")
+            )
+            .groupby(test_col)["_fail"]
+            .mean()
+            .mul(100)
+            .reset_index(name="Failure_Rate")
+        )
+
+        fig = px.bar(
+            test_failure,
+            x=test_col,
+            y="Failure_Rate",
+            color="Failure_Rate",
+            color_continuous_scale="Reds",
+            title="Failure Rate by Test"
+        )
+
+        fig.update_layout(
+            yaxis_title="Failure Rate (%)"
+        )
+
+        st.plotly_chart(
+            style_chart(fig),
+            use_container_width=True
+        )
+
+
+# ============================================================
+# FAILURE MODE ANALYSIS
+# ============================================================
+
+st.divider()
+
+st.subheader("❌ Failure Mode Analysis")
+
+if result_col and failure_col:
+
+    failures = filtered[
+        filtered[result_col] == "FAIL"
+    ]
+
+    if not failures.empty:
+
+        modes = (
+            failures[failure_col]
+            .fillna("Unspecified")
+            .value_counts()
+            .rename_axis("Failure Mode")
+            .reset_index(name="Count")
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            fig = px.bar(
+                modes,
+                x="Count",
+                y="Failure Mode",
+                orientation="h",
+                color="Count",
+                color_continuous_scale="Reds",
+                title="Top Failure Modes"
+            )
+
+            fig.update_layout(
+                yaxis={"categoryorder": "total ascending"}
+            )
+
+            st.plotly_chart(
+                style_chart(fig),
+                use_container_width=True
+            )
+
+        with col2:
+
+            fig = px.pie(
+                modes,
+                names="Failure Mode",
+                values="Count",
+                hole=0.45,
+                title="Failure Mode Composition"
+            )
+
+            st.plotly_chart(
+                style_chart(fig),
+                use_container_width=True
+            )
+
+    else:
+
+        st.success("No failures in the current filtered data.")
+
 else:
 
-    st.info(
-        "No numeric columns were detected."
+    st.info("Failure mode column was not detected.")
+
+
+# ============================================================
+# NUMERIC PARAMETER ANALYSIS
+# ============================================================
+
+st.divider()
+
+st.subheader("📈 Numeric Parameter Analysis")
+
+available_numeric = [
+    col for col in numeric_columns
+    if col != result_col
+]
+
+if available_numeric:
+
+    selected_parameter = st.selectbox(
+        "Select Test Parameter",
+        available_numeric
     )
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        fig = px.histogram(
+            filtered,
+            x=selected_parameter,
+            color=result_col if result_col else None,
+            marginal="box",
+            nbins=40,
+            barmode="overlay",
+            opacity=0.75,
+            title=f"{selected_parameter} Distribution"
+        )
+
+        st.plotly_chart(
+            style_chart(fig),
+            use_container_width=True
+        )
+
+    with col2:
+
+        if result_col:
+
+            fig = px.box(
+                filtered,
+                x=result_col,
+                y=selected_parameter,
+                color=result_col,
+                color_discrete_map=COLORS,
+                points="outliers",
+                title=f"{selected_parameter} by Result"
+            )
+
+        else:
+
+            fig = px.box(
+                filtered,
+                y=selected_parameter,
+                points="outliers",
+                title=f"{selected_parameter} Box Plot"
+            )
+
+        st.plotly_chart(
+            style_chart(fig),
+            use_container_width=True
+        )
+
+
+# ============================================================
+# SCATTER PLOT
+# ============================================================
+
+if len(available_numeric) >= 2:
+
+    st.subheader("🔬 Parameter Relationship")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        x_parameter = st.selectbox(
+            "X Axis",
+            available_numeric,
+            index=0
+        )
+
+    with col2:
+
+        y_parameter = st.selectbox(
+            "Y Axis",
+            available_numeric,
+            index=1
+        )
+
+    fig = px.scatter(
+        filtered,
+        x=x_parameter,
+        y=y_parameter,
+        color=result_col if result_col else None,
+        color_discrete_map=COLORS,
+        opacity=0.75,
+        title=f"{y_parameter} vs {x_parameter}"
+    )
+
+    st.plotly_chart(
+        style_chart(fig),
+        use_container_width=True
+    )
+
+
+# ============================================================
+# CORRELATION HEATMAP
+# ============================================================
+
+st.divider()
+
+st.subheader("🌡️ Correlation Heatmap")
+
+if len(available_numeric) >= 2:
+
+    correlation = filtered[
+        available_numeric
+    ].corr(numeric_only=True)
+
+    fig = px.imshow(
+        correlation,
+        text_auto=".2f",
+        aspect="auto",
+        color_continuous_scale="RdBu_r",
+        zmin=-1,
+        zmax=1,
+        title="Test Parameter Correlation"
+    )
+
+    st.plotly_chart(
+        style_chart(fig, 500),
+        use_container_width=True
+    )
+
+
+# ============================================================
+# TIME TREND
+# ============================================================
+
+timestamp_col = find_column(
+    filtered,
+    ["Timestamp", "DateTime", "Date", "Test_Time"]
+)
+
+if timestamp_col and result_col:
+
+    st.divider()
+
+    st.subheader("🕒 Yield Trend Analysis")
+
+    trend = filtered.copy()
+
+    trend[timestamp_col] = pd.to_datetime(
+        trend[timestamp_col],
+        errors="coerce"
+    )
+
+    trend = trend.dropna(
+        subset=[timestamp_col]
+    )
+
+    if not trend.empty:
+
+        trend["Period"] = (
+            trend[timestamp_col].dt.floor("D")
+        )
+
+        daily = (
+            trend.assign(
+                _pass=(trend[result_col] == "PASS")
+            )
+            .groupby("Period")["_pass"]
+            .mean()
+            .mul(100)
+            .reset_index(name="Yield")
+        )
+
+        fig = px.line(
+            daily,
+            x="Period",
+            y="Yield",
+            markers=True,
+            title="Daily Test Yield Trend"
+        )
+
+        fig.update_layout(
+            yaxis_title="Yield (%)",
+            yaxis_range=[0, 100]
+        )
+
+        st.plotly_chart(
+            style_chart(fig),
+            use_container_width=True
+        )
+
+
+# ============================================================
+# DATA QUALITY
+# ============================================================
+
+st.divider()
+
+st.subheader("🧹 Data Quality Analysis")
+
+quality = pd.DataFrame({
+
+    "Column": filtered.columns,
+
+    "Data Type": [
+        str(filtered[c].dtype)
+        for c in filtered.columns
+    ],
+
+    "Missing Values": [
+        int(filtered[c].isna().sum())
+        for c in filtered.columns
+    ],
+
+    "Missing Percentage": [
+        round(
+            filtered[c].isna().mean() * 100,
+            2
+        )
+        for c in filtered.columns
+    ],
+
+    "Unique Values": [
+        int(filtered[c].nunique())
+        for c in filtered.columns
+    ]
+
+})
+
+st.dataframe(
+    quality,
+    use_container_width=True,
+    hide_index=True
+)
+
+fig = px.bar(
+    quality.sort_values(
+        "Missing Percentage",
+        ascending=False
+    ),
+    x="Missing Percentage",
+    y="Column",
+    orientation="h",
+    color="Missing Percentage",
+    color_continuous_scale="OrRd",
+    title="Missing Values by Column"
+)
+
+fig.update_layout(
+    yaxis={"categoryorder": "total ascending"}
+)
+
+st.plotly_chart(
+    style_chart(fig),
+    use_container_width=True
+)
 
 
 # ============================================================
@@ -573,79 +1069,111 @@ else:
 
 st.divider()
 
-st.subheader("🚨 Anomaly Detection")
+st.subheader("🚨 AI Anomaly Detection")
 
-anomaly_features = numbers.copy()
+if len(available_numeric) >= 2 and len(filtered) >= 10:
 
-if len(anomaly_features) >= 2:
-
-    anomaly_data = df[
-        anomaly_features
-    ].copy()
-
-    anomaly_data = anomaly_data.apply(
-        pd.to_numeric,
-        errors="coerce"
+    contamination = st.slider(
+        "Anomaly Detection Sensitivity",
+        min_value=0.01,
+        max_value=0.20,
+        value=0.05,
+        step=0.01
     )
 
-    anomaly_data = anomaly_data.replace(
-        [np.inf, -np.inf],
-        np.nan
+    anomaly_data = (
+        filtered[available_numeric]
+        .replace([np.inf, -np.inf], np.nan)
     )
 
-    anomaly_data = anomaly_data.fillna(
-        anomaly_data.median()
+    imputer = SimpleImputer(
+        strategy="median"
     )
 
-    anomaly_data = anomaly_data.fillna(0)
-
-    detector = IsolationForest(
-        contamination="auto",
-        random_state=42
-    )
-
-    detector.fit(
+    anomaly_matrix = imputer.fit_transform(
         anomaly_data
     )
 
-    df["Anomaly_Score"] = (
-        -detector.decision_function(
-            anomaly_data
-        )
+    detector = IsolationForest(
+        contamination=contamination,
+        random_state=42
     )
 
-    df["Anomaly"] = (
-        detector.predict(
-            anomaly_data
-        ) == -1
+    flags = detector.fit_predict(
+        anomaly_matrix
+    )
+
+    anomaly_view = filtered.copy()
+
+    anomaly_view["Anomaly_Status"] = np.where(
+        flags == -1,
+        "Review",
+        "Typical"
+    )
+
+    anomaly_view["Anomaly_Score"] = (
+        -detector.decision_function(
+            anomaly_matrix
+        )
     )
 
     anomaly_count = int(
-        df["Anomaly"].sum()
+        (flags == -1).sum()
     )
 
-    st.metric(
+    c1, c2 = st.columns(2)
+
+    c1.metric(
         "Potential Anomalies",
-        anomaly_count
+        f"{anomaly_count:,}"
     )
+
+    c2.metric(
+        "Typical Records",
+        f"{len(filtered) - anomaly_count:,}"
+    )
+
+    fig = px.scatter(
+        anomaly_view,
+        x=available_numeric[0],
+        y=available_numeric[1],
+        color="Anomaly_Status",
+        title="Anomaly Detection Map"
+    )
+
+    st.plotly_chart(
+        style_chart(fig),
+        use_container_width=True
+    )
+
+    st.markdown("### Records Requiring Review")
 
     suspicious = (
-        df.sort_values(
+        anomaly_view[
+            anomaly_view["Anomaly_Status"] == "Review"
+        ]
+        .sort_values(
             "Anomaly_Score",
             ascending=False
         )
-        .head(20)
     )
 
     st.dataframe(
-        suspicious,
+        suspicious.head(100),
         use_container_width=True
+    )
+
+    download_csv(
+        anomaly_view,
+        "ate_anomaly_results.csv",
+        "⬇️ Download Anomaly Results"
     )
 
 else:
 
     st.info(
-        "At least two numeric columns are needed for anomaly detection."
+        "At least 10 records and 2 numeric columns "
+        "are required for anomaly detection."
     )
 
 
@@ -655,405 +1183,344 @@ else:
 
 st.divider()
 
-st.subheader("🤖 Failure Prediction")
+st.subheader("🤖 Machine Learning Failure Prediction")
 
-if result_col is None:
+if result_col and len(available_numeric) >= 2:
 
-    st.warning(
-        "A PASS/FAIL result column was not detected, so ML training cannot start."
-    )
-
-else:
-
-    ml_df = df[
-        df[result_col].isin(
+    ml_df = filtered[
+        filtered[result_col].isin(
             ["PASS", "FAIL"]
         )
     ].copy()
 
-    # --------------------------------------------------------
-    # Select numeric features
-    # --------------------------------------------------------
-
-    ml_features = [
-        col
-        for col in numbers
-        if col != result_col
+    features = [
+        col for col in available_numeric
+        if col in ml_df.columns
     ]
 
-    # Remove generated anomaly columns
-    ml_features = [
-        col
-        for col in ml_features
-        if col not in [
-            "Anomaly",
-            "Anomaly_Score"
-        ]
-    ]
+    if (
+        len(features) >= 2
+        and ml_df[result_col].nunique() == 2
+        and len(ml_df) >= 30
+    ):
 
-    if len(ml_features) < 2:
-
-        st.warning(
-            "Not enough numeric features for machine learning."
+        X = ml_df[features].replace(
+            [np.inf, -np.inf],
+            np.nan
         )
-
-    elif ml_df[result_col].nunique() < 2:
-
-        st.warning(
-            "Both PASS and FAIL records are required."
-        )
-
-    else:
-
-        X = ml_df[
-            ml_features
-        ]
 
         y = (
             ml_df[result_col] == "FAIL"
         ).astype(int)
 
-        # ----------------------------------------------------
-        # Train / Test
-        # ----------------------------------------------------
+        if y.value_counts().min() >= 2:
 
-        X_train, X_test, y_train, y_test = (
-            train_test_split(
-                X,
-                y,
-                test_size=0.20,
-                random_state=42,
-                stratify=y
-            )
-        )
-
-        # ----------------------------------------------------
-        # Logistic Regression
-        # ----------------------------------------------------
-
-        logistic_model = Pipeline(
-            [
-                (
-                    "imputer",
-                    SimpleImputer(
-                        strategy="median"
-                    )
-                ),
-
-                (
-                    "scaler",
-                    StandardScaler()
-                ),
-
-                (
-                    "model",
-                    LogisticRegression(
-                        max_iter=1000,
-                        class_weight="balanced"
-                    )
+            X_train, X_test, y_train, y_test = (
+                train_test_split(
+                    X,
+                    y,
+                    test_size=0.20,
+                    random_state=42,
+                    stratify=y
                 )
-            ]
-        )
-
-        logistic_model.fit(
-            X_train,
-            y_train
-        )
-
-        logistic_pred = (
-            logistic_model.predict(
-                X_test
             )
-        )
 
-        logistic_prob = (
-            logistic_model.predict_proba(
-                X_test
-            )[:, 1]
-        )
+            models = {
 
-        # ----------------------------------------------------
-        # Random Forest
-        # ----------------------------------------------------
+                "Logistic Regression": Pipeline([
 
-        forest_model = Pipeline(
-            [
-                (
-                    "imputer",
-                    SimpleImputer(
-                        strategy="median"
+                    (
+                        "imputer",
+                        SimpleImputer(
+                            strategy="median"
+                        )
+                    ),
+
+                    (
+                        "scaler",
+                        StandardScaler()
+                    ),
+
+                    (
+                        "model",
+                        LogisticRegression(
+                            max_iter=1500,
+                            class_weight="balanced"
+                        )
                     )
-                ),
 
-                (
-                    "model",
-                    RandomForestClassifier(
-                        n_estimators=200,
-                        random_state=42,
-                        class_weight="balanced"
+                ]),
+
+                "Random Forest": Pipeline([
+
+                    (
+                        "imputer",
+                        SimpleImputer(
+                            strategy="median"
+                        )
+                    ),
+
+                    (
+                        "model",
+                        RandomForestClassifier(
+                            n_estimators=250,
+                            random_state=42,
+                            class_weight="balanced",
+                            min_samples_leaf=2
+                        )
                     )
+
+                ])
+
+            }
+
+            metrics = []
+            predictions = {}
+
+            for name, model in models.items():
+
+                model.fit(
+                    X_train,
+                    y_train
                 )
-            ]
-        )
 
-        forest_model.fit(
-            X_train,
-            y_train
-        )
+                pred = model.predict(
+                    X_test
+                )
 
-        forest_pred = (
-            forest_model.predict(
-                X_test
-            )
-        )
+                probability = (
+                    model.predict_proba(X_test)[:, 1]
+                )
 
-        forest_prob = (
-            forest_model.predict_proba(
-                X_test
-            )[:, 1]
-        )
+                predictions[name] = pred
 
-        # ----------------------------------------------------
-        # Metrics
-        # ----------------------------------------------------
+                metrics.append({
 
-        def calculate_metrics(
-            name,
-            prediction,
-            probability
-        ):
+                    "Model": name,
 
-            return {
-                "Model": name,
-
-                "Accuracy":
-                    accuracy_score(
+                    "Accuracy": accuracy_score(
                         y_test,
-                        prediction
+                        pred
                     ),
 
-                "Precision":
-                    precision_score(
+                    "Precision": precision_score(
                         y_test,
-                        prediction,
+                        pred,
                         zero_division=0
                     ),
 
-                "Recall":
-                    recall_score(
+                    "Recall": recall_score(
                         y_test,
-                        prediction,
+                        pred,
                         zero_division=0
                     ),
 
-                "F1":
-                    f1_score(
+                    "F1 Score": f1_score(
                         y_test,
-                        prediction,
+                        pred,
                         zero_division=0
                     ),
 
-                "ROC-AUC":
-                    roc_auc_score(
+                    "ROC AUC": roc_auc_score(
                         y_test,
                         probability
                     )
-            }
 
-        metrics = pd.DataFrame(
-            [
-                calculate_metrics(
-                    "Logistic Regression",
-                    logistic_pred,
-                    logistic_prob
-                ),
+                })
 
-                calculate_metrics(
-                    "Random Forest",
-                    forest_pred,
-                    forest_prob
-                )
-            ]
-        )
-
-        metrics_display = metrics.copy()
-
-        for column in [
-            "Accuracy",
-            "Precision",
-            "Recall",
-            "F1",
-            "ROC-AUC"
-        ]:
-
-            metrics_display[column] = (
-                metrics_display[column]
-                .round(3)
-            )
-
-        st.dataframe(
-            metrics_display,
-            use_container_width=True
-        )
-
-        # ----------------------------------------------------
-        # Best Model
-        # ----------------------------------------------------
-
-        best_index = (
-            metrics["F1"]
-            .idxmax()
-        )
-
-        best_model_name = (
-            metrics.loc[
-                best_index,
-                "Model"
-            ]
-        )
-
-        if best_model_name == "Random Forest":
-
-            best_model = forest_model
-
-        else:
-
-            best_model = logistic_model
-
-        st.success(
-            f"Best baseline model by F1: {best_model_name}"
-        )
-
-        # ----------------------------------------------------
-        # Confusion Matrix
-        # ----------------------------------------------------
-
-        if best_model_name == "Random Forest":
-
-            best_predictions = forest_pred
-
-        else:
-
-            best_predictions = logistic_pred
-
-        matrix = confusion_matrix(
-            y_test,
-            best_predictions
-        )
-
-        matrix_df = pd.DataFrame(
-            matrix,
-            index=["Actual PASS", "Actual FAIL"],
-            columns=["Predicted PASS", "Predicted FAIL"]
-        )
-
-        st.markdown(
-            "### Confusion Matrix"
-        )
-
-        st.dataframe(
-            matrix_df,
-            use_container_width=True
-        )
-
-        # ----------------------------------------------------
-        # Feature Importance
-        # ----------------------------------------------------
-
-        if best_model_name == "Random Forest":
-
-            importance = (
-                best_model
-                .named_steps["model"]
-                .feature_importances_
-            )
-
-            importance_df = pd.DataFrame(
-                {
-                    "Feature": ml_features,
-                    "Importance": importance
-                }
-            ).sort_values(
-                "Importance",
-                ascending=False
+            metrics_df = pd.DataFrame(
+                metrics
             )
 
             st.markdown(
-                "### Feature Influence"
+                "### Model Performance Comparison"
+            )
+
+            st.dataframe(
+                metrics_df.style.format({
+                    "Accuracy": "{:.3f}",
+                    "Precision": "{:.3f}",
+                    "Recall": "{:.3f}",
+                    "F1 Score": "{:.3f}",
+                    "ROC AUC": "{:.3f}"
+                }),
+                use_container_width=True,
+                hide_index=True
             )
 
             fig = px.bar(
-                importance_df,
-                x="Importance",
-                y="Feature",
-                orientation="h",
-                title="Random Forest Feature Importance"
+                metrics_df.melt(
+                    id_vars="Model",
+                    var_name="Metric",
+                    value_name="Score"
+                ),
+                x="Metric",
+                y="Score",
+                color="Model",
+                barmode="group",
+                range_y=[0, 1],
+                title="Machine Learning Model Comparison"
             )
 
             st.plotly_chart(
-                fig,
+                style_chart(fig),
                 use_container_width=True
             )
 
+            # Confusion matrix
 
-# ============================================================
-# ENGINEERING OBSERVATIONS
-# ============================================================
+            selected_model = st.selectbox(
+                "Select Model for Confusion Matrix",
+                list(models.keys())
+            )
 
-st.divider()
+            cm = confusion_matrix(
+                y_test,
+                predictions[selected_model],
+                labels=[0, 1]
+            )
 
-st.subheader("🧠 Engineering Observations")
+            fig = px.imshow(
+                cm,
+                text_auto=True,
+                x=["Predicted PASS", "Predicted FAIL"],
+                y=["Actual PASS", "Actual FAIL"],
+                color_continuous_scale="Blues",
+                title="Confusion Matrix"
+            )
 
-observations = []
+            st.plotly_chart(
+                style_chart(fig, 350),
+                use_container_width=True
+            )
 
-if result_col is not None:
+            # Random Forest Feature Importance
 
-    observations.append(
-        f"Detected result column: `{result_col}`."
-    )
+            if selected_model == "Random Forest":
 
-    if fail_count > 0:
+                importance = (
+                    models[selected_model]
+                    .named_steps["model"]
+                    .feature_importances_
+                )
 
-        observations.append(
-            f"{fail_count:,} FAIL records were identified."
-        )
+                importance_df = pd.DataFrame({
 
-    if yield_rate < 95:
+                    "Feature": features,
 
-        observations.append(
-            f"Overall yield is {yield_rate:.2f}%, which indicates "
-            "a relatively high failure rate and deserves investigation."
-        )
+                    "Importance": importance
+
+                }).sort_values(
+                    "Importance"
+                )
+
+                fig = px.bar(
+                    importance_df,
+                    x="Importance",
+                    y="Feature",
+                    orientation="h",
+                    title="Feature Importance"
+                )
+
+                st.plotly_chart(
+                    style_chart(fig),
+                    use_container_width=True
+                )
+
+            st.caption(
+                "Model metrics are calculated on a held-out "
+                "test split. These are baseline results, "
+                "not production qualification."
+            )
+
+        else:
+
+            st.warning(
+                "Not enough examples in both PASS and FAIL classes."
+            )
 
     else:
 
-        observations.append(
-            f"Overall yield is {yield_rate:.2f}%."
+        st.warning(
+            "At least 30 records, two numeric features, "
+            "and both PASS and FAIL classes are required."
         )
 
-if duplicate_count > 0:
+else:
 
-    observations.append(
-        f"{duplicate_count:,} exact duplicate rows were removed "
-        "during basic data cleaning."
+    st.info(
+        "A PASS/FAIL result column and numeric test "
+        "parameters are required for ML."
     )
 
-if missing_values > 0:
 
-    observations.append(
-        f"The dataset contains {missing_values:,} missing values."
-    )
-
-for observation in observations:
-
-    st.write(
-        "• " + observation
-    )
-
+# ============================================================
+# DATA EXPORT
+# ============================================================
 
 st.divider()
 
-st.caption(
-    "Verilumen AI Test Intelligence | "
-    "Starter engineering application"
+st.subheader("📥 Download Your Analysis")
+
+col1, col2 = st.columns(2)
+
+with col1:
+
+    download_csv(
+        filtered,
+        "verilumen_filtered_data.csv",
+        "⬇️ Download Filtered Dataset"
+    )
+
+with col2:
+
+    download_csv(
+        df,
+        "verilumen_cleaned_data.csv",
+        "⬇️ Download Full Cleaned Dataset"
+    )
+
+
+# ============================================================
+# DATA PREVIEW
+# ============================================================
+
+st.divider()
+
+st.subheader("🗂️ Dataset Explorer")
+
+preview_rows = st.slider(
+    "Number of rows to display",
+    min_value=10,
+    max_value=min(500, len(filtered)),
+    value=min(100, len(filtered)),
+    step=10
 )
+
+st.dataframe(
+    filtered.head(preview_rows),
+    use_container_width=True,
+    hide_index=True
+)
+
+
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.markdown("""
+<center>
+
+### 🔬 Verilumen AI Test Intelligence
+
+Semiconductor ATE Analytics and Machine Learning
+
+<small>
+Yield Monitoring | Failure Analysis | Anomaly Detection |
+Predictive Analytics
+</small>
+
+</center>
+""", unsafe_allow_html=True)
